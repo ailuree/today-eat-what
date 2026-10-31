@@ -2,6 +2,19 @@
   <div class="page">
     <div class="page-title">📊 热量统计</div>
 
+    <!-- 统计对象切换 -->
+    <div class="stat-switch">
+      <button
+        v-for="v in statViewerOptions"
+        :key="v.id"
+        class="stat-btn"
+        :class="{ active: statViewer === v.id }"
+        @click="statViewer = v.id"
+      >
+        {{ v.emoji }} {{ v.label }}
+      </button>
+    </div>
+
     <!-- 月份切换 -->
     <div class="card">
       <div class="flex-between mb-12">
@@ -68,7 +81,7 @@
       v-if="selectedDate"
       :date-str="selectedDate"
       :records="selectedRecords"
-      :goal="appStore.dailyGoal"
+      :goal="statGoal"
       @close="selectedDate = ''"
       @remove="onRemoveRecord"
     />
@@ -92,6 +105,26 @@ const selectedDate = ref('')
 const chartRef = ref(null)
 let chart = null
 
+// 统计对象切换
+const statViewer = ref('me')
+const statViewerOptions = computed(() => [
+  { id: 'me', label: '我', emoji: appStore.profiles[0]?.emoji || '🙋' },
+  { id: 'partner', label: 'TA', emoji: appStore.profiles[1]?.emoji || '🙋‍♀️' },
+  { id: 'all', label: '合计', emoji: '👫' }
+])
+const statOperators = computed(() =>
+  statViewer.value === 'all' ? ['me', 'partner'] : [statViewer.value]
+)
+// 按统计对象过滤后的记录（旧记录无 operatorId 时按“我”处理）
+const filteredMeals = computed(() =>
+  allMeals.value.filter((r) => statOperators.value.includes(r.operatorId || 'me'))
+)
+const statGoal = computed(() => {
+  if (statViewer.value === 'me') return appStore.dailyGoal
+  if (statViewer.value === 'partner') return appStore.dailyGoalB
+  return appStore.dailyGoal + appStore.dailyGoalB
+})
+
 const weekNames = ['一', '二', '三', '四', '五', '六', '日']
 
 onMounted(async () => {
@@ -101,12 +134,14 @@ onMounted(async () => {
   renderChart()
 })
 
-watch(cursor, () => {})
+watch([cursor, statViewer], () => {
+  nextTick(() => renderChart())
+})
 
-/** 按日期聚合的热量映射 */
+/** 按日期聚合的热量映射（跟随统计对象） */
 const kcalMap = computed(() => {
   const map = {}
-  for (const r of allMeals.value) {
+  for (const r of filteredMeals.value) {
     map[r.date] = (map[r.date] || 0) + (r.kcal || 0)
   }
   return map
@@ -129,7 +164,7 @@ const calendarCells = computed(() => {
 })
 
 function kcalClass(kcal) {
-  const goal = appStore.dailyGoal
+  const goal = statGoal.value
   if (kcal > goal) return 'over'
   if (kcal > goal * 0.85) return 'near'
   return 'good'
@@ -139,7 +174,7 @@ const monthSummary = computed(() => {
   const monthDates = calendarCells.value.filter(Boolean).map((c) => c.dateStr)
   const recorded = monthDates.filter((d) => (kcalMap.value[d] || 0) > 0)
   const total = recorded.reduce((s, d) => s + kcalMap.value[d], 0)
-  const goal = appStore.dailyGoal
+  const goal = statGoal.value
   return {
     avg: recorded.length ? Math.round(total / recorded.length) : 0,
     goodDays: recorded.filter((d) => kcalMap.value[d] <= goal).length,
@@ -149,7 +184,7 @@ const monthSummary = computed(() => {
 
 function changeMonth(delta) {
   const d = new Date(cursor.value)
-  d.setMonth(d.getMonth() + delta)
+  d.setMonth(d.setMonth(d.getMonth() + delta))
   cursor.value = d
 }
 
@@ -159,7 +194,7 @@ function openDay(cell) {
 }
 
 const selectedRecords = computed(() =>
-  allMeals.value
+  filteredMeals.value
     .filter((r) => r.date === selectedDate.value)
     .sort((a, b) => a.createdAt - b.createdAt)
 )
@@ -183,7 +218,7 @@ function renderChart() {
     dates.push(`${d.getMonth() + 1}/${d.getDate()}`)
     values.push(kcalMap.value[s] || 0)
   }
-  const goal = appStore.dailyGoal
+  const goal = statGoal.value
   chart.setOption({
     grid: { left: 40, right: 12, top: 24, bottom: 28 },
     tooltip: { trigger: 'axis' },
@@ -214,6 +249,28 @@ function resizeChart() {
 </script>
 
 <style scoped>
+.stat-switch {
+  display: flex;
+  gap: 6px;
+  background: var(--cream);
+  padding: 5px;
+  border-radius: 14px;
+  margin-bottom: 14px;
+}
+.stat-btn {
+  flex: 1;
+  padding: 8px 4px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink-soft);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.stat-btn.active {
+  background: #fff;
+  color: var(--amber-dark);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+}
 .cal-week,
 .cal-grid {
   display: grid;
