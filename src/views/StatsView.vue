@@ -184,7 +184,7 @@ const monthSummary = computed(() => {
 
 function changeMonth(delta) {
   const d = new Date(cursor.value)
-  d.setMonth(d.setMonth(d.getMonth() + delta))
+  d.setMonth(d.getMonth() + delta)
   cursor.value = d
 }
 
