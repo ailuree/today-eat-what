@@ -1,0 +1,12 @@
+node_modules
+dist
+dist-ssr
+*.local
+.DS_Store
+package-lock.json
+# 由 scripts/generate-icons.mjs 从 SVG 自动生成，不入库
+public/icons/*.png
+npm-debug.log*
+.vscode/*
+!.vscode/extensions.json
+.idea

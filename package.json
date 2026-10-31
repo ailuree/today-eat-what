@@ -1,0 +1,29 @@
+{
+  "name": "today-eat-what",
+  "version": "1.0.0",
+  "private": true,
+  "description": "今天吃点啥 - 情侣轻量点餐决策与卡路里记录 PWA",
+  "type": "module",
+  "scripts": {
+    "predev": "node scripts/generate-icons.mjs",
+    "dev": "vite",
+    "prebuild": "node scripts/generate-icons.mjs",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.118.0",
+    "canvas-confetti": "^1.9.3",
+    "dexie": "^4.0.10",
+    "echarts": "^5.5.13",
+    "pinia": "^2.2.6",
+    "vue": "^3.5.13",
+    "vue-router": "^4.4.5"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.1",
+    "sharp": "^0.35.5",
+    "vite": "^6.0.3",
+    "vite-plugin-pwa": "^0.21.1"
+  }
+}
