@@ -1,6 +1,14 @@
 import { defineStore } from 'pinia'
 import { getMeta, setMeta } from '../db'
 
+/**
+ * 彻底剥离 Vue 响应式 Proxy，转成可被 IndexedDB 结构化克隆的纯对象。
+ * meta 中只含字符串/数字等简单数据，JSON 转换安全。
+ */
+function toPlain(value) {
+  return JSON.parse(JSON.stringify(value))
+}
+
 export const useAppStore = defineStore('app', {
   state: () => ({
     dailyGoal: 1700,
@@ -24,15 +32,15 @@ export const useAppStore = defineStore('app', {
       this.loaded = true
     },
     async saveGoals() {
-      await setMeta('dailyGoal', this.dailyGoal)
-      await setMeta('dailyGoalB', this.dailyGoalB)
+      await setMeta('dailyGoal', toPlain(this.dailyGoal))
+      await setMeta('dailyGoalB', toPlain(this.dailyGoalB))
     },
     async saveProfiles() {
-      await setMeta('profiles', this.profiles)
+      await setMeta('profiles', toPlain(this.profiles))
     },
     async saveRoom(room) {
       this.room = room
-      await setMeta('room', room)
+      await setMeta('room', toPlain(room))
     }
   }
 })

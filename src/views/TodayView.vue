@@ -8,6 +8,19 @@
       <router-link to="/wheel" class="go-wheel">🎡</router-link>
     </div>
 
+    <!-- 视图切换：我 / TA / 合计 -->
+    <div class="viewer-switch">
+      <button
+        v-for="v in viewerOptions"
+        :key="v.id"
+        class="viewer-btn"
+        :class="{ active: viewer === v.id }"
+        @click="viewer = v.id"
+      >
+        {{ v.emoji }} {{ v.label }}
+      </button>
+    </div>
+
     <!-- 热量进度环 -->
     <div class="card progress-card">
       <div class="ring">
@@ -43,7 +56,7 @@
             <div class="num">{{ records.length }} 条</div>
           </div>
         </div>
-        <button class="btn btn-primary btn-sm mt-8" @click="showQuick = true">＋ 快速加一餐</button>
+        <button class="btn btn-primary btn-sm mt-8" @click="openQuick">＋ 快速加一餐</button>
       </div>
     </div>
 
@@ -83,6 +96,20 @@
               @click="quickMealType = m"
             >
               {{ m }}
+            </button>
+          </div>
+        </div>
+        <div class="field">
+          <label>这餐是谁吃的</label>
+          <div class="flex gap-8">
+            <button
+              v-for="p in peopleOptions"
+              :key="p.id"
+              class="chip"
+              :class="{ active: quickOperator === p.id }"
+              @click="quickOperator = p.id"
+            >
+              {{ p.emoji }} {{ p.label }}
             </button>
           </div>
         </div>
@@ -133,6 +160,19 @@ const showQuick = ref(false)
 const quickMealType = ref('午餐')
 const quickKw = ref('')
 const quickDish = ref(null)
+const quickOperator = ref('me')
+
+// 视图切换
+const viewer = ref('me')
+const viewerOptions = [
+  { id: 'me', label: '我', emoji: appStore.profiles[0]?.emoji || '🙋' },
+  { id: 'partner', label: 'TA', emoji: appStore.profiles[1]?.emoji || '🙋‍♀️' },
+  { id: 'all', label: '合计', emoji: '👫' }
+]
+const peopleOptions = [
+  { id: 'me', label: '我', emoji: appStore.profiles[0]?.emoji || '🙋' },
+  { id: 'partner', label: 'TA', emoji: appStore.profiles[1]?.emoji || '🙋‍♀️' }
+]
 
 onMounted(async () => {
   if (!dishStore.loaded) await dishStore.load()
@@ -140,9 +180,18 @@ onMounted(async () => {
   await mealStore.loadDate(date)
 })
 
-const records = computed(() => mealStore.records(date))
-const total = computed(() => mealStore.totalKcal(date))
-const goal = computed(() => appStore.dailyGoal)
+// 当前视图下包含的用餐人（旧记录无 operatorId 时按“我”处理）
+const activeOperators = computed(() => (viewer.value === 'all' ? ['me', 'partner'] : [viewer.value]))
+
+const records = computed(() =>
+  mealStore.records(date).filter((r) => activeOperators.value.includes(r.operatorId || 'me'))
+)
+const total = computed(() => records.value.reduce((s, r) => s + (r.kcal || 0), 0))
+const goal = computed(() => {
+  if (viewer.value === 'me') return appStore.dailyGoal
+  if (viewer.value === 'partner') return appStore.dailyGoalB
+  return appStore.dailyGoal + appStore.dailyGoalB
+})
 
 const circumference = 2 * Math.PI * 50
 const dashOffset = computed(() => {
@@ -186,10 +235,21 @@ const quickList = computed(() => {
 
 async function confirmQuick() {
   if (!quickDish.value) return
-  await mealStore.addMeal({ date, mealType: quickMealType.value, dish: quickDish.value })
+  await mealStore.addMeal({
+    date,
+    mealType: quickMealType.value,
+    dish: quickDish.value,
+    operatorId: quickOperator.value
+  })
   showQuick.value = false
   quickDish.value = null
   quickKw.value = ''
+}
+
+// 打开快速弹窗：默认用餐人跟随当前视图（合计时默认“我”）
+function openQuick() {
+  quickOperator.value = viewer.value === 'partner' ? 'partner' : 'me'
+  showQuick.value = true
 }
 </script>
 
@@ -215,6 +275,28 @@ async function confirmQuick() {
   justify-content: center;
   font-size: 26px;
   text-decoration: none;
+}
+.viewer-switch {
+  display: flex;
+  gap: 6px;
+  background: var(--cream);
+  padding: 5px;
+  border-radius: 14px;
+  margin-bottom: 14px;
+}
+.viewer-btn {
+  flex: 1;
+  padding: 8px 4px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink-soft);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.viewer-btn.active {
+  background: #fff;
+  color: var(--amber-dark);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
 }
 .progress-card {
   display: flex;
@@ -335,7 +417,6 @@ async function confirmQuick() {
   font-size: 20px;
 }
 .pick-name {
-  flex: 1;
   font-weight: 600;
 }
 .mb-12 {
