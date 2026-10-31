@@ -63,7 +63,7 @@ npm run preview    # 本地预览构建产物
     ├── router/
     ├── db/             # Dexie 数据库与内置菜品种子数据
     ├── stores/         # Pinia：菜品 / 进食记录 / 应用设置
-    ├── utils/          # 热量计算、图片压缩等
+    ├── utils/          # 热量计算、图片压缩等工具
     ├── components/     # 转盘、底部导航、菜品表单等
     └── views/          # 今日 / 转盘 / 菜品 / 统计 / 设置 五个页面
 ```

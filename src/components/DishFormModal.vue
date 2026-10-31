@@ -51,6 +51,31 @@
         <input v-model.number="form.kcalPer100g" type="number" min="0" class="input" placeholder="如 150" />
       </div>
 
+      <!-- 常见食物热量参考：搜索点选即可自动填充 -->
+      <div class="field">
+        <button type="button" class="ref-toggle" @click="showRef = !showRef">
+          <span>{{ showRef ? '▾' : '▸' }} 常见食物热量参考（点选自动填充，无需联网查）</span>
+        </button>
+        <div v-if="showRef" class="ref-box">
+          <input v-model="refKw" class="input" placeholder="搜索食物，如：米饭 / 汉堡 / 鸡胸肉" />
+          <div class="ref-list">
+            <button
+              v-for="item in filteredRef"
+              :key="item.name"
+              type="button"
+              class="ref-item"
+              @click="applyRef(item)"
+            >
+              <span class="ref-emoji">{{ item.emoji }}</span>
+              <span class="ref-name">{{ item.name }}</span>
+              <span class="ref-cat muted">{{ item.category }}</span>
+              <span class="ref-kcal num">{{ item.kcal }} 千卡</span>
+            </button>
+            <div v-if="!filteredRef.length" class="muted ref-empty">没有匹配的食物，可直接在上方手动输入热量</div>
+          </div>
+        </div>
+      </div>
+
       <div class="field">
         <label>一份的重量（克）</label>
         <input v-model.number="form.defaultPortionG" type="number" min="1" class="input" />
@@ -70,8 +95,9 @@
 </template>
 
 <script setup>
-import { reactive, computed } from 'vue'
+import { reactive, ref, computed } from 'vue'
 import { categories } from '../db/seed'
+import { foodCalorieRef } from '../db/food-calorie-reference'
 import { compressImage } from '../utils/image'
 
 const props = defineProps({ dish: { type: Object, default: null } })
@@ -98,6 +124,27 @@ const form = reactive({
 })
 
 const canSave = computed(() => form.name.trim().length > 0 && Number(form.kcalPer100g) >= 0)
+
+/* ---------- 常见食物热量参考 ---------- */
+const showRef = ref(false)
+const refKw = ref('')
+const filteredRef = computed(() => {
+  const kw = refKw.value.trim()
+  if (!kw) return foodCalorieRef.slice(0, 40)
+  return foodCalorieRef.filter(
+    (i) => i.name.includes(kw) || i.category.includes(kw)
+  ).slice(0, 40)
+})
+
+/** 点选参考项：填充每百克热量；名称为空时顺带填名称与 emoji */
+function applyRef(item) {
+  form.kcalPer100g = item.kcal
+  if (!form.name.trim()) {
+    // 去掉名称里的「（熟）/（生）」等口径标注，让菜品名更简洁
+    form.name = item.name.replace(/（[^）]*）/g, '')
+    form.emoji = item.emoji
+  }
+}
 
 const previewKcal = computed(() =>
   Math.round(((Number(form.kcalPer100g) || 0) * (Number(form.defaultPortionG) || 0)) / 100)
@@ -173,5 +220,66 @@ function save() {
 }
 .mb-12 {
   margin-bottom: 12px;
+}
+.ref-toggle {
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--amber-dark);
+  font-size: 13px;
+  font-weight: 700;
+  padding: 4px 0;
+}
+.ref-box {
+  margin-top: 6px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 8px;
+  background: var(--cream);
+}
+.ref-list {
+  margin-top: 8px;
+  max-height: 200px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ref-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: 9px;
+  border: 1px solid transparent;
+  background: #fff;
+  text-align: left;
+}
+.ref-item:hover {
+  border-color: var(--amber);
+  background: var(--amber-soft);
+}
+.ref-emoji {
+  font-size: 18px;
+}
+.ref-name {
+  font-weight: 700;
+  font-size: 13px;
+}
+.ref-cat {
+  font-size: 11px;
+}
+.ref-kcal {
+  margin-left: auto;
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--amber-dark);
+  white-space: nowrap;
+}
+.ref-empty {
+  padding: 10px;
+  font-size: 12px;
+  text-align: center;
 }
 </style>

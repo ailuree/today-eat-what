@@ -14,7 +14,13 @@
         <span v-for="w in weekNames" :key="w">{{ w }}</span>
       </div>
       <div class="cal-grid">
-        <div v-for="(cell, i) in calendarCells" :key="i" class="cal-cell" :class="{ blank: !cell }">
+        <div
+          v-for="(cell, i) in calendarCells"
+          :key="i"
+          class="cal-cell"
+          :class="{ blank: !cell, clickable: cell }"
+          @click="cell && openDay(cell)"
+        >
           <template v-if="cell">
             <span class="cal-day" :class="{ today: cell.dateStr === todayStr() }">{{ cell.day }}</span>
             <span
@@ -25,6 +31,8 @@
           </template>
         </div>
       </div>
+
+      <div class="cal-tip mt-12 muted">点击任意日期，可查看当天吃了什么</div>
 
       <div class="cal-legend mt-12 muted">
         <span><i style="background: var(--mint)"></i>达标</span>
@@ -54,6 +62,16 @@
       <strong>近 7 天热量趋势</strong>
       <div ref="chartRef" class="chart"></div>
     </div>
+
+    <!-- 历史当天详情 -->
+    <DayDetailModal
+      v-if="selectedDate"
+      :date-str="selectedDate"
+      :records="selectedRecords"
+      :goal="appStore.dailyGoal"
+      @close="selectedDate = ''"
+      @remove="onRemoveRecord"
+    />
   </div>
 </template>
 
@@ -62,11 +80,15 @@ import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import * as echarts from 'echarts'
 import { db } from '../db'
 import { useAppStore } from '../stores/app'
+import { useMealStore } from '../stores/meals'
 import { todayStr } from '../utils/calc'
+import DayDetailModal from '../components/DayDetailModal.vue'
 
 const appStore = useAppStore()
+const mealStore = useMealStore()
 const cursor = ref(new Date())
 const allMeals = ref([])
+const selectedDate = ref('')
 const chartRef = ref(null)
 let chart = null
 
@@ -129,6 +151,24 @@ function changeMonth(delta) {
   const d = new Date(cursor.value)
   d.setMonth(d.getMonth() + delta)
   cursor.value = d
+}
+
+/* ---------- 历史当天详情 ---------- */
+function openDay(cell) {
+  selectedDate.value = cell.dateStr
+}
+
+const selectedRecords = computed(() =>
+  allMeals.value
+    .filter((r) => r.date === selectedDate.value)
+    .sort((a, b) => a.createdAt - b.createdAt)
+)
+
+async function onRemoveRecord(record) {
+  if (!confirm(`删除「${record.dishName}」这条记录？`)) return
+  await mealStore.removeMeal(record.date, record.id)
+  // 重新读取并刷新月历数字
+  allMeals.value = await db.meals.toArray()
 }
 
 function renderChart() {
@@ -199,6 +239,18 @@ function resizeChart() {
 }
 .cal-cell.blank {
   background: transparent;
+}
+.cal-cell.clickable {
+  cursor: pointer;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+.cal-cell.clickable:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.08);
+}
+.cal-tip {
+  font-size: 12px;
+  text-align: center;
 }
 .cal-day {
   font-size: 12px;

@@ -2,12 +2,91 @@
 -- 「今天吃点啥」Supabase 初始化脚本
 -- 使用前：
 --   1) Supabase 控制台 → Authentication → Providers → 开启 Anonymous（匿名登录）
---   2) SQL Editor 中完整粘贴并执行本文件
--- 数据模型与本地 IndexedDB 对应；安全模型：匿名用户凭房间成员关系（room_members）
--- 只能读写自己所在房间的数据（RLS 行级安全）。
+--   2) SQL Editor 中完整粘贴并执行本文件（务必从头到尾一次运行，不要只选片段）
+-- 安全模型：匿名用户凭房间成员关系（room_members）只能读写自己所在房间的数据
+-- （RLS 行级安全）。脚本可重复执行：建表用 if not exists，策略先 drop 再 create。
+-- 顺序说明：先建全部表，再定义引用这些表的函数，避免分块运行时“表不存在”。
 -- ============================================================================
 
--- ---------- 工具函数：判断当前用户是否为某房间成员 ----------
+-- ============================================================
+-- 一、建表
+-- ============================================================
+
+-- ---------- 房间 ----------
+create table if not exists public.rooms (
+  id uuid primary key default gen_random_uuid(),
+  code text not null unique,            -- 6 位邀请码
+  created_by uuid,
+  created_at timestamptz not null default now()
+);
+
+-- ---------- 成员资料（每个 auth 用户一条） ----------
+create table if not exists public.profiles (
+  id uuid primary key references auth.users(id) on delete cascade,
+  name text not null default '我',
+  emoji text not null default '🙋',
+  color text not null default '#E8833A',
+  updated_at timestamptz not null default now()
+);
+
+-- ---------- 房间成员关系 ----------
+create table if not exists public.room_members (
+  room_id uuid not null references public.rooms(id) on delete cascade,
+  member_id uuid not null references auth.users(id) on delete cascade,
+  joined_at timestamptz not null default now(),
+  primary key (room_id, member_id)
+);
+
+-- ---------- 菜品 ----------
+create table if not exists public.dishes (
+  id uuid primary key,                    -- 与客户端本地 id 一致
+  room_id uuid not null references public.rooms(id) on delete cascade,
+  name text not null,
+  category text not null default '主食',
+  emoji text not null default '🍽️',
+  kcal_per_100g numeric not null default 0,
+  default_portion_g numeric not null default 100,
+  custom_image text,                      -- 压缩后 dataURL
+  builtin boolean not null default false,
+  deleted boolean not null default false,
+  operator_id uuid,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- ---------- 进食记录 ----------
+create table if not exists public.meals (
+  id uuid primary key,
+  room_id uuid not null references public.rooms(id) on delete cascade,
+  date date not null,
+  meal_type text not null,
+  dish_id uuid,
+  dish_name text not null,
+  emoji text,
+  mode text not null default 'portion',
+  servings numeric not null default 1,
+  grams integer,
+  kcal integer not null default 0,
+  operator_id uuid,
+  note text,
+  created_at timestamptz not null default now()
+);
+
+-- ---------- 抽签历史（可选） ----------
+create table if not exists public.spins (
+  id uuid primary key,
+  room_id uuid not null references public.rooms(id) on delete cascade,
+  dish_id uuid,
+  dish_name text not null,
+  operator_id uuid,
+  created_at timestamptz not null default now()
+);
+
+-- ============================================================
+-- 二、工具函数（此时被引用的表都已存在）
+-- ============================================================
+
+-- 判断当前用户是否为某房间成员
 create or replace function public.is_room_member(p_room uuid)
 returns boolean
 language sql
@@ -21,13 +100,30 @@ as $$
   );
 $$;
 
--- ---------- 房间 ----------
-create table if not exists public.rooms (
-  id uuid primary key default gen_random_uuid(),
-  code text not null unique,            -- 6 位邀请码
-  created_by uuid,
-  created_at timestamptz not null default now()
-);
+-- 新用户登录后自动创建 profile
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+begin
+  insert into public.profiles (id, name, emoji, color)
+  values (new.id, '我', '🙋', '#E8833A')
+  on conflict (id) do nothing;
+  return new;
+end;
+$$;
+
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute function public.handle_new_user();
+
+-- ============================================================
+-- 三、行级安全（RLS）策略
+-- ============================================================
+
+-- ---------- rooms ----------
 alter table public.rooms enable row level security;
 
 drop policy if exists "登录用户可查看房间（加入流程需要按邀请码查询）" on public.rooms;
@@ -48,14 +144,7 @@ create policy "房间成员可更新房间"
   to authenticated
   using (public.is_room_member(id));
 
--- ---------- 成员资料（每个 auth 用户一条） ----------
-create table if not exists public.profiles (
-  id uuid primary key references auth.users(id) on delete cascade,
-  name text not null default '我',
-  emoji text not null default '🙋',
-  color text not null default '#E8833A',
-  updated_at timestamptz not null default now()
-);
+-- ---------- profiles ----------
 alter table public.profiles enable row level security;
 
 drop policy if exists "登录用户可读成员资料（房间内展示昵称头像）" on public.profiles;
@@ -77,31 +166,7 @@ create policy "用户只能更新自己的资料"
   using (id = auth.uid())
   with check (id = auth.uid());
 
--- 新用户登录后自动创建 profile（可选触发器）
-create or replace function public.handle_new_user()
-returns trigger
-language plpgsql
-security definer set search_path = public
-as $$
-begin
-  insert into public.profiles (id, name, emoji, color)
-  values (new.id, '我', '🙋', '#E8833A')
-  on conflict (id) do nothing;
-  return new;
-end;
-$$;
-drop trigger if exists on_auth_user_created on auth.users;
-create trigger on_auth_user_created
-  after insert on auth.users
-  for each row execute function public.handle_new_user();
-
--- ---------- 房间成员关系 ----------
-create table if not exists public.room_members (
-  room_id uuid not null references public.rooms(id) on delete cascade,
-  member_id uuid not null references auth.users(id) on delete cascade,
-  joined_at timestamptz not null default now(),
-  primary key (room_id, member_id)
-);
+-- ---------- room_members ----------
 alter table public.room_members enable row level security;
 
 drop policy if exists "房间成员可查看成员关系" on public.room_members;
@@ -116,22 +181,7 @@ create policy "登录用户可加入已存在的房间"
   to authenticated
   with check (member_id = auth.uid());
 
--- ---------- 菜品 ----------
-create table if not exists public.dishes (
-  id uuid primary key,                    -- 与客户端本地 id 一致
-  room_id uuid not null references public.rooms(id) on delete cascade,
-  name text not null,
-  category text not null default '主食',
-  emoji text not null default '🍽️',
-  kcal_per_100g numeric not null default 0,
-  default_portion_g numeric not null default 100,
-  custom_image text,                      -- 压缩后 dataURL
-  builtin boolean not null default false,
-  deleted boolean not null default false,
-  operator_id uuid,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
+-- ---------- dishes ----------
 alter table public.dishes enable row level security;
 
 drop policy if exists "房间成员可读取菜品" on public.dishes;
@@ -159,23 +209,7 @@ create policy "房间成员可删除菜品"
   to authenticated
   using (public.is_room_member(room_id));
 
--- ---------- 进食记录 ----------
-create table if not exists public.meals (
-  id uuid primary key,
-  room_id uuid not null references public.rooms(id) on delete cascade,
-  date date not null,
-  meal_type text not null,
-  dish_id uuid,
-  dish_name text not null,
-  emoji text,
-  mode text not null default 'portion',
-  servings numeric not null default 1,
-  grams integer,
-  kcal integer not null default 0,
-  operator_id uuid,
-  note text,
-  created_at timestamptz not null default now()
-);
+-- ---------- meals ----------
 alter table public.meals enable row level security;
 
 drop policy if exists "房间成员可读取进食记录" on public.meals;
@@ -203,15 +237,7 @@ create policy "房间成员可删除进食记录"
   to authenticated
   using (public.is_room_member(room_id));
 
--- ---------- 抽签历史（可选） ----------
-create table if not exists public.spins (
-  id uuid primary key,
-  room_id uuid not null references public.rooms(id) on delete cascade,
-  dish_id uuid,
-  dish_name text not null,
-  operator_id uuid,
-  created_at timestamptz not null default now()
-);
+-- ---------- spins ----------
 alter table public.spins enable row level security;
 
 drop policy if exists "房间成员可读取抽签历史" on public.spins;
@@ -226,15 +252,32 @@ create policy "房间成员可新增抽签历史"
   to authenticated
   with check (public.is_room_member(room_id));
 
--- ---------- 开启实时订阅 ----------
+-- ============================================================
+-- 四、实时订阅与索引
+-- ============================================================
+
 -- Replica Identity Full：让 DELETE 实时事件携带完整旧行
 alter table public.dishes replica identity full;
 alter table public.meals replica identity full;
-alter publication supabase_realtime add table public.dishes;
-alter publication supabase_realtime add table public.meals;
-alter publication supabase_realtime add table public.room_members;
 
--- ---------- 索引 ----------
+do $$
+begin
+  alter publication supabase_realtime add table public.dishes;
+exception when duplicate_object then null;
+end $$;
+
+do $$
+begin
+  alter publication supabase_realtime add table public.meals;
+exception when duplicate_object then null;
+end $$;
+
+do $$
+begin
+  alter publication supabase_realtime add table public.room_members;
+exception when duplicate_object then null;
+end $$;
+
 create index if not exists idx_dishes_room on public.dishes(room_id);
 create index if not exists idx_meals_room_date on public.meals(room_id, date);
 create index if not exists idx_room_members_member on public.room_members(member_id);

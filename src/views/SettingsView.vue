@@ -294,7 +294,8 @@ async function importData(e) {
     if (data.presets) await db.presets.bulkPut(data.presets)
     if (data.meta) await db.meta.bulkPut(data.meta)
     alert('导入成功，刷新页面后生效')
-  } catch (err) {
+  } catch (err)
+ {
     alert(`导入失败：${err.message}`)
   } finally {
     e.target.value = ''
