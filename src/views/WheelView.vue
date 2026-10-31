@@ -62,6 +62,21 @@
         <div class="muted mb-12">一份约 {{ portionKcal(result) }} 千卡（{{ result.defaultPortionG }}克）</div>
 
         <div class="field">
+          <label>这餐是谁吃的</label>
+          <div class="flex gap-8">
+            <button
+              v-for="p in resultPeople"
+              :key="p.id"
+              class="chip"
+              :class="{ active: resultOperator === p.id }"
+              @click="resultOperator = p.id"
+            >
+              {{ p.emoji }} {{ p.label }}
+            </button>
+          </div>
+        </div>
+
+        <div class="field">
           <label>计入哪一餐</label>
           <div class="flex gap-8" style="flex-wrap: wrap">
             <button
@@ -111,11 +126,13 @@ import confetti from 'canvas-confetti'
 import TheWheel from '../components/TheWheel.vue'
 import { useDishStore } from '../stores/dishes'
 import { useMealStore } from '../stores/meals'
+import { useAppStore } from '../stores/app'
 import { categories } from '../db/seed'
 import { portionKcal, kcalByGrams, kcalByServings, todayStr } from '../utils/calc'
 
 const dishStore = useDishStore()
 const mealStore = useMealStore()
+const appStore = useAppStore()
 const wheelRef = ref(null)
 
 const chosenIds = ref(new Set())
@@ -127,6 +144,11 @@ const resultMealType = ref(defaultMealType())
 const resultMode = ref('portion')
 const resultServings = ref(1)
 const resultGrams = ref(200)
+const resultOperator = ref('me')
+
+const resultPeople = computed(() =>
+  appStore.profiles.map((p) => ({ id: p.id, label: p.name, emoji: p.emoji }))
+)
 
 onMounted(async () => {
   if (!dishStore.loaded) await dishStore.load()
@@ -194,6 +216,7 @@ function onDone(dish) {
   resultMode.value = 'portion'
   resultServings.value = 1
   resultGrams.value = dish.defaultPortionG || 200
+  resultOperator.value = 'me'
   fireConfetti()
   mealStore.recordSpin({ dish })
 }
@@ -225,7 +248,8 @@ async function saveResult() {
     dish: result.value,
     mode: resultMode.value,
     servings: resultServings.value,
-    grams: resultGrams.value
+    grams: resultGrams.value,
+    operatorId: resultOperator.value
   })
   result.value = null
 }
@@ -283,7 +307,6 @@ async function respin() {
   font-size: 20px;
 }
 .pick-name {
-  flex: 1;
   font-weight: 600;
 }
 .pick-item input {
