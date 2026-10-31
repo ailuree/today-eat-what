@@ -1,0 +1,263 @@
+<template>
+  <div class="page">
+    <div class="page-title">📊 热量统计</div>
+
+    <!-- 月份切换 -->
+    <div class="card">
+      <div class="flex-between mb-12">
+        <button class="btn btn-ghost btn-sm" @click="changeMonth(-1)">‹ 上月</button>
+        <strong>{{ cursor.getFullYear() }} 年 {{ cursor.getMonth() + 1 }} 月</strong>
+        <button class="btn btn-ghost btn-sm" @click="changeMonth(1)">下月 ›</button>
+      </div>
+
+      <div class="cal-week">
+        <span v-for="w in weekNames" :key="w">{{ w }}</span>
+      </div>
+      <div class="cal-grid">
+        <div v-for="(cell, i) in calendarCells" :key="i" class="cal-cell" :class="{ blank: !cell }">
+          <template v-if="cell">
+            <span class="cal-day" :class="{ today: cell.dateStr === todayStr() }">{{ cell.day }}</span>
+            <span
+              v-if="cell.kcal > 0"
+              class="cal-kcal num"
+              :class="kcalClass(cell.kcal)"
+            >{{ cell.kcal }}</span>
+          </template>
+        </div>
+      </div>
+
+      <div class="cal-legend mt-12 muted">
+        <span><i style="background: var(--mint)"></i>达标</span>
+        <span><i style="background: var(--amber)"></i>接近目标</span>
+        <span><i style="background: var(--tomato)"></i>超标</span>
+      </div>
+    </div>
+
+    <!-- 月度汇总 -->
+    <div class="card summary-card">
+      <div class="summary-item">
+        <div class="num big">{{ monthSummary.avg }}</div>
+        <div class="muted">日均热量</div>
+      </div>
+      <div class="summary-item">
+        <div class="num big" style="color: var(--mint)">{{ monthSummary.goodDays }}</div>
+        <div class="muted">达标天数</div>
+      </div>
+      <div class="summary-item">
+        <div class="num big" style="color: var(--tomato)">{{ monthSummary.overDays }}</div>
+        <div class="muted">超标天数</div>
+      </div>
+    </div>
+
+    <!-- 近 7 天趋势 -->
+    <div class="card">
+      <strong>近 7 天热量趋势</strong>
+      <div ref="chartRef" class="chart"></div>
+    </div>
+  </div>
+</template>
+
+<script setup>
+import { ref, computed, onMounted, nextTick, watch } from 'vue'
+import * as echarts from 'echarts'
+import { db } from '../db'
+import { useAppStore } from '../stores/app'
+import { todayStr } from '../utils/calc'
+
+const appStore = useAppStore()
+const cursor = ref(new Date())
+const allMeals = ref([])
+const chartRef = ref(null)
+let chart = null
+
+const weekNames = ['一', '二', '三', '四', '五', '六', '日']
+
+onMounted(async () => {
+  if (!appStore.loaded) await appStore.load()
+  allMeals.value = await db.meals.toArray()
+  await nextTick()
+  renderChart()
+})
+
+watch(cursor, () => {})
+
+/** 按日期聚合的热量映射 */
+const kcalMap = computed(() => {
+  const map = {}
+  for (const r of allMeals.value) {
+    map[r.date] = (map[r.date] || 0) + (r.kcal || 0)
+  }
+  return map
+})
+
+const calendarCells = computed(() => {
+  const year = cursor.value.getFullYear()
+  const month = cursor.value.getMonth()
+  const firstDay = new Date(year, month, 1)
+  // 周一开头：getDay 0(周日) -> 6
+  const lead = (firstDay.getDay() + 6) % 7
+  const days = new Date(year, month + 1, 0).getDate()
+  const cells = []
+  for (let i = 0; i < lead; i++) cells.push(null)
+  for (let d = 1; d <= days; d++) {
+    const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+    cells.push({ day: d, dateStr, kcal: kcalMap.value[dateStr] || 0 })
+  }
+  return cells
+})
+
+function kcalClass(kcal) {
+  const goal = appStore.dailyGoal
+  if (kcal > goal) return 'over'
+  if (kcal > goal * 0.85) return 'near'
+  return 'good'
+}
+
+const monthSummary = computed(() => {
+  const monthDates = calendarCells.value.filter(Boolean).map((c) => c.dateStr)
+  const recorded = monthDates.filter((d) => (kcalMap.value[d] || 0) > 0)
+  const total = recorded.reduce((s, d) => s + kcalMap.value[d], 0)
+  const goal = appStore.dailyGoal
+  return {
+    avg: recorded.length ? Math.round(total / recorded.length) : 0,
+    goodDays: recorded.filter((d) => kcalMap.value[d] <= goal).length,
+    overDays: recorded.filter((d) => kcalMap.value[d] > goal).length
+  }
+})
+
+function changeMonth(delta) {
+  const d = new Date(cursor.value)
+  d.setMonth(d.getMonth() + delta)
+  cursor.value = d
+}
+
+function renderChart() {
+  if (!chartRef.value) return
+  chart = echarts.init(chartRef.value)
+  const dates = []
+  const values = []
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date()
+    d.setDate(d.getDate() - i)
+    const s = todayStr(d)
+    dates.push(`${d.getMonth() + 1}/${d.getDate()}`)
+    values.push(kcalMap.value[s] || 0)
+  }
+  const goal = appStore.dailyGoal
+  chart.setOption({
+    grid: { left: 40, right: 12, top: 24, bottom: 28 },
+    tooltip: { trigger: 'axis' },
+    xAxis: { type: 'category', data: dates, axisLine: { lineStyle: { color: '#C9BBA6' } } },
+    yAxis: { type: 'value', splitLine: { lineStyle: { color: '#EFE6D6' } } },
+    series: [
+      {
+        type: 'bar',
+        data: values.map((v) => ({
+          value: v,
+          itemStyle: { color: v > goal ? '#E0584C' : v > goal * 0.85 ? '#E8833A' : '#7FB77E', borderRadius: [5, 5, 0, 0] }
+        })),
+        barWidth: '52%',
+        markLine: {
+          symbol: 'none',
+          lineStyle: { color: '#B5838D', type: 'dashed' },
+          data: [{ yAxis: goal, label: { formatter: `目标 ${goal}` } }]
+        }
+      }
+    ]
+  })
+  window.addEventListener('resize', resizeChart)
+}
+
+function resizeChart() {
+  chart && chart.resize()
+}
+</script>
+
+<style scoped>
+.cal-week,
+.cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+}
+.cal-week {
+  margin-bottom: 6px;
+  color: var(--ink-soft);
+  font-size: 12px;
+  text-align: center;
+  font-weight: 700;
+}
+.cal-cell {
+  min-height: 52px;
+  border-radius: 10px;
+  background: var(--cream);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 2px;
+}
+.cal-cell.blank {
+  background: transparent;
+}
+.cal-day {
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+.cal-day.today {
+  color: #fff;
+  background: var(--amber);
+  border-radius: 50%;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+}
+.cal-kcal {
+  font-size: 12px;
+}
+.cal-kcal.good {
+  color: var(--mint);
+}
+.cal-kcal.near {
+  color: var(--amber-dark);
+}
+.cal-kcal.over {
+  color: var(--tomato);
+}
+.cal-legend {
+  display: flex;
+  gap: 16px;
+}
+.cal-legend i {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  margin-right: 4px;
+}
+.summary-card {
+  display: flex;
+  margin-top: 14px;
+}
+.summary-item {
+  flex: 1;
+  text-align: center;
+}
+.summary-item .big {
+  font-size: 24px;
+}
+.chart {
+  width: 100%;
+  height: 220px;
+  margin-top: 8px;
+}
+.mb-12 {
+  margin-bottom: 12px;
+}
+.mt-12 {
+  margin-top: 12px;
+}
+</style>
