@@ -74,19 +74,26 @@
       </div>
       <div class="field">
         <label>TA 的目标</label>
-        <input v-model.number="appStore.dailyGoalB" type="number" min="800" class="input" />
+        <input v-model.number="appStore.dailyGoalB" type="number" class="input" />
       </div>
       <button class="btn btn-primary btn-block" @click="saveGoals">保存目标</button>
     </div>
 
     <!-- 双人资料 -->
     <div class="card">
-      <strong>我的资料（同步到房间）</strong>
-      <div class="profile-row mt-12">
-        <button class="emoji-pick" @click="cycleEmoji">{{ myProfile.emoji }}</button>
-        <input v-model="myProfile.name" class="input" style="flex: 1" maxlength="10" />
+      <strong>双人资料</strong>
+      <p class="muted mt-8">昵称、头像可分别设置；「我」的资料会同步到云端房间，「TA」的资料保存在本机。</p>
+      <div v-for="(p, idx) in profileForms" :key="p.id" class="profile-edit mt-12">
+        <button class="emoji-pick" @click="cycleEmoji(idx)">{{ p.emoji }}</button>
+        <input
+          v-model="p.name"
+          class="input"
+          style="flex: 1"
+          maxlength="10"
+          :placeholder="p.id === 'me' ? '我的昵称' : 'TA 的昵称'"
+        />
+        <button class="btn btn-primary btn-sm" @click="saveOneProfile(idx)">保存</button>
       </div>
-      <button class="btn btn-primary btn-block mt-12" @click="saveMyProfile">保存资料</button>
     </div>
 
     <!-- 安装应用 -->
@@ -142,11 +149,15 @@ let deferredPrompt = null
 let unsub = null
 const statusTick = ref(0)
 
-const myProfile = ref({ id: 'me', name: '我', emoji: '🙋', color: '#E8833A' })
+const profileForms = ref([
+  { id: 'me', name: '我', emoji: '🙋', color: '#E8833A' },
+  { id: 'partner', name: 'TA', emoji: '🙋‍♀️', color: '#E5989B' }
+])
 
 onMounted(async () => {
   if (!appStore.loaded) await appStore.load()
-  myProfile.value = { ...appStore.profiles[0] }
+  // 用本地已保存的资料初始化两个可编辑表单
+  profileForms.value = appStore.profiles.map((p) => ({ ...p }))
   unsub = sync.on(() => {
     statusTick.value++
   })
@@ -205,7 +216,7 @@ async function createRoom() {
     return
   }
   try {
-    const room = await sync.createRoom(myProfile.value)
+    const room = await sync.createRoom(profileForms.value[0])
     alert(`房间已创建，邀请码：${room.code}`)
   } catch (err) {
     alert(err.message || '创建失败')
@@ -218,7 +229,7 @@ async function join() {
     return
   }
   try {
-    await sync.joinRoom(joinCode.value, myProfile.value)
+    await sync.joinRoom(joinCode.value, profileForms.value[0])
     alert('加入成功，数据同步中')
   } catch (err) {
     alert(err.message || '加入失败')
@@ -243,24 +254,51 @@ async function saveGoals() {
   alert('目标已保存')
 }
 
-async function saveMyProfile() {
-  const profiles = appStore.profiles.map((p, i) => (i === 0 ? { ...myProfile.value } : p))
-  appStore.profiles = profiles
-  await appStore.saveProfiles()
-  // 若已在房间，同步更新云端 profile
-  if (sync.online) {
-    const { error } = await sync.client
-      .from('profiles')
-      .upsert({ id: sync.userId, name: myProfile.value.name, emoji: myProfile.value.emoji, color: myProfile.value.color })
-    if (error) alert(error.message)
+async function saveOneProfile(idx) {
+  const form = profileForms.value[idx]
+  const name = (form.name || '').trim()
+  if (!name) {
+    alert('请填写昵称')
+    return
   }
-  alert('资料已保存')
+  try {
+    // 1. 先更新内存中的 profiles
+    const profiles = appStore.profiles.map((p) => (p.id === form.id ? { ...form, name } : p))
+    appStore.profiles = profiles
+    // 2. 本地持久化（必须成功，否则直接报错，不进入云端步骤）
+    await appStore.saveProfiles()
+
+    // 3. 仅「我」是当前设备的真实账号，在线时同步云端；「TA」只保存在本机
+    if (form.id === 'me' && sync.online) {
+      try {
+        const { error } = await sync.client.from('profiles').upsert({
+          id: sync.userId,
+          name,
+          emoji: form.emoji,
+          color: form.color
+        })
+        if (error) {
+          console.error('云端同步失败', error.message)
+          alert('资料已保存到本机，但云端同步失败：' + error.message)
+          return
+        }
+      } catch (netErr) {
+        console.error('云端同步异常', netErr)
+        alert('资料已保存到本机，但当前网络无法同步云端')
+        return
+      }
+    }
+    alert('资料已保存')
+  } catch (err) {
+    alert('保存失败：' + (err.message || err))
+  }
 }
 
 const emojiCycle = ['🙋', '🙋‍♀️', '🧑', '👩', '👦', '👧', '🐻', '🐰', '🐱', '🐶', '🐼', '🦊']
-function cycleEmoji() {
-  const i = emojiCycle.indexOf(myProfile.value.emoji)
-  myProfile.value.emoji = emojiCycle[(i + 1) % emojiCycle.length]
+function cycleEmoji(idx) {
+  const form = profileForms.value[idx]
+  const i = emojiCycle.indexOf(form.emoji)
+  form.emoji = emojiCycle[(i + 1) % emojiCycle.length]
 }
 
 async function exportData() {
@@ -371,10 +409,16 @@ async function clearData() {
   letter-spacing: 4px;
   text-transform: uppercase;
 }
-.profile-row {
+.profile-edit {
   display: flex;
   gap: 10px;
   align-items: center;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+.profile-edit:last-of-type {
+  border-bottom: none;
+  padding-bottom: 0;
 }
 .emoji-pick {
   width: 46px;
