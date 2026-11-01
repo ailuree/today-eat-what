@@ -101,9 +101,9 @@
         </div>
         <div class="field">
           <label>这餐是谁吃的</label>
-          <div class="flex gap-8">
+          <div class="flex gap-8" style="flex-wrap: wrap">
             <button
-              v-for="p in peopleOptions"
+              v-for="p in eaterOptions"
               :key="p.id"
               class="chip"
               :class="{ active: quickOperator === p.id }"
@@ -111,6 +111,35 @@
             >
               {{ p.emoji }} {{ p.label }}
             </button>
+          </div>
+          <p v-if="quickOperator === 'share'" class="muted field-hint">
+            将按所选总份数，在两人之间各记一半（如共喝一杯奶茶、合吃一份鸡公煲）
+          </p>
+        </div>
+
+        <!-- 份数 -->
+        <div class="field">
+          <label>份数（按菜品「一份」的默认重量计）</label>
+          <div class="flex gap-8" style="flex-wrap: wrap; align-items: center">
+            <button
+              v-for="s in servingPresets"
+              :key="s"
+              class="chip"
+              :class="{ active: Number(quickServings) === s }"
+              @click="quickServings = s"
+            >
+              {{ s === 0.5 ? '半份' : s + '份' }}
+            </button>
+            <div class="serving-custom">
+              <input
+                v-model.number="quickServings"
+                type="number"
+                min="0.25"
+                step="0.25"
+                class="input"
+              />
+              <span class="muted">份</span>
+            </div>
           </div>
         </div>
         <div class="field">
@@ -130,10 +159,28 @@
             <span class="muted">{{ portionKcal(d) }}千卡/份</span>
           </button>
         </div>
+
+        <!-- 热量预览 -->
+        <div v-if="quickDish" class="kcal-preview">
+          <template v-if="quickOperator === 'share'">
+            <div class="muted">
+              两人各 <span class="num">{{ formatServings(shareEach) }}</span> 份，各约
+              <span class="num">{{ shareEachKcal }}</span> 千卡
+            </div>
+            <div class="preview-total">合计 <span class="num">{{ previewKcal }}</span> 千卡</div>
+          </template>
+          <template v-else>
+            <div class="preview-total">
+              本餐 <span class="num">{{ formatServings(validServings) }}</span> 份，约
+              <span class="num">{{ previewKcal }}</span> 千卡
+            </div>
+          </template>
+        </div>
+
         <div class="flex gap-8 mt-12">
           <button class="btn btn-ghost" style="flex: 1" @click="showQuick = false">取消</button>
-          <button class="btn btn-primary" style="flex: 1" :disabled="!quickDish" @click="confirmQuick">
-            确认（1 份）
+          <button class="btn btn-primary" style="flex: 1" :disabled="!canConfirm" @click="confirmQuick">
+            {{ confirmLabel }}
           </button>
         </div>
       </div>
@@ -146,7 +193,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useDishStore } from '../stores/dishes'
 import { useMealStore } from '../stores/meals'
 import { useAppStore } from '../stores/app'
-import { portionKcal, todayStr } from '../utils/calc'
+import { portionKcal, kcalByServings, todayStr } from '../utils/calc'
 
 const dishStore = useDishStore()
 const mealStore = useMealStore()
@@ -161,6 +208,8 @@ const quickMealType = ref('午餐')
 const quickKw = ref('')
 const quickDish = ref(null)
 const quickOperator = ref('me')
+const quickServings = ref(1)
+const servingPresets = [0.5, 1, 2]
 
 // 视图切换
 const viewer = ref('me')
@@ -169,9 +218,10 @@ const viewerOptions = [
   { id: 'partner', label: 'TA', emoji: appStore.profiles[1]?.emoji || '🙋‍♀️' },
   { id: 'all', label: '合计', emoji: '👫' }
 ]
-const peopleOptions = [
+const eaterOptions = [
   { id: 'me', label: '我', emoji: appStore.profiles[0]?.emoji || '🙋' },
-  { id: 'partner', label: 'TA', emoji: appStore.profiles[1]?.emoji || '🙋‍♀️' }
+  { id: 'partner', label: 'TA', emoji: appStore.profiles[1]?.emoji || '🙋‍♀️' },
+  { id: 'share', label: '两人平分', emoji: '🤝' }
 ]
 
 onMounted(async () => {
@@ -233,22 +283,67 @@ const quickList = computed(() => {
   return kw ? list.filter((d) => d.name.includes(kw)) : list
 })
 
+// 份数兜底：非法或非正数时按 1 份处理
+const validServings = computed(() => {
+  const n = Number(quickServings.value)
+  return Number.isFinite(n) && n > 0 ? n : 1
+})
+// 所选总份数对应的总热量
+const previewKcal = computed(() =>
+  quickDish.value ? kcalByServings(quickDish.value, validServings.value) : 0
+)
+// 两人平分时每人的份数与热量
+const shareEach = computed(() => validServings.value / 2)
+const shareEachKcal = computed(() =>
+  quickDish.value ? kcalByServings(quickDish.value, shareEach.value) : 0
+)
+const canConfirm = computed(() => !!quickDish.value)
+const confirmLabel = computed(() => {
+  if (!quickDish.value) return '确认'
+  if (quickOperator.value === 'share') {
+    return `确认（各${formatServings(shareEach.value)}份 · 共${previewKcal.value}千卡）`
+  }
+  return `确认（${formatServings(validServings.value)}份 · ${previewKcal.value}千卡）`
+})
+
+/** 份数显示：整数不带小数点，小数去掉多余的 0 */
+function formatServings(n) {
+  const v = Number(n)
+  return Number.isInteger(v) ? String(v) : String(Math.round(v * 100) / 100)
+}
+
 async function confirmQuick() {
   if (!quickDish.value) return
-  await mealStore.addMeal({
+  const common = {
     date,
     mealType: quickMealType.value,
-    dish: quickDish.value,
-    operatorId: quickOperator.value
-  })
+    dish: quickDish.value
+  }
+  if (quickOperator.value === 'share') {
+    // 两人平分：各记一半，生成两条记录
+    await mealStore.addMeal({ ...common, servings: shareEach.value, operatorId: 'me' })
+    await mealStore.addMeal({ ...common, servings: shareEach.value, operatorId: 'partner' })
+  } else {
+    await mealStore.addMeal({
+      ...common,
+      servings: validServings.value,
+      operatorId: quickOperator.value
+    })
+  }
+  resetQuick()
+}
+
+function resetQuick() {
   showQuick.value = false
   quickDish.value = null
   quickKw.value = ''
+  quickServings.value = 1
 }
 
-// 打开快速弹窗：默认用餐人跟随当前视图（合计时默认“我”）
+// 打开快速弹窗：默认用餐人跟随当前视图（合计时默认“我”），份数重置为 1
 function openQuick() {
   quickOperator.value = viewer.value === 'partner' ? 'partner' : 'me'
+  quickServings.value = 1
   showQuick.value = true
 }
 </script>
@@ -392,6 +487,31 @@ function openQuick() {
   font-weight: 800;
   line-height: 1;
 }
+.field-hint {
+  font-size: 12px;
+  margin-top: 6px;
+}
+.serving-custom {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.serving-custom .input {
+  width: 84px;
+}
+.kcal-preview {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--cream);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.preview-total {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--amber-dark);
+}
 .quick-list {
   max-height: 40vh;
   overflow-y: auto;
@@ -417,6 +537,7 @@ function openQuick() {
   font-size: 20px;
 }
 .pick-name {
+  flex: 1;
   font-weight: 600;
 }
 .mb-12 {
